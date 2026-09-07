@@ -15,7 +15,7 @@ import type {
   RefreshTarget,
   SourceRefreshResult,
 } from "./provider.ts";
-import { ocxReady, ocxStart, ocxStatus, waitForOcxReady } from "./ocx-cli.ts";
+import { ocxReady, ocxStart, ocxStatus, ocxSync, waitForOcxReady } from "./ocx-cli.ts";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -49,6 +49,10 @@ function parseRefreshTarget(value: string | undefined): RefreshTarget | undefine
   return undefined;
 }
 
+export function refreshRequiresOcxSync(target: RefreshTarget): boolean {
+  return target !== "metadata";
+}
+
 function statusText(config: ReturnType<typeof loadConfig>, snapshot: CatalogSnapshot): string {
   const metadataAge = snapshot.metadataUpdatedAt ? `, ${age(snapshot.metadataUpdatedAt)}` : "";
   return [
@@ -77,6 +81,30 @@ async function requireReady(ctx: ExtensionCommandContext): Promise<boolean> {
     "Run /opencodex start or start OpenCodex manually with `ocx start`.",
   ].join("\n"), "warning");
   return false;
+}
+
+async function syncOpenCodexCatalog(ctx: ExtensionCommandContext): Promise<boolean> {
+  const synced = await ocxSync();
+  if (!synced.ok) {
+    ctx.ui.notify([
+      "OpenCodex catalog sync failed.",
+      synced.error ?? synced.stderr ?? "ocx sync failed",
+      "Run `ocx sync` manually to inspect the full OpenCodex error before retrying.",
+    ].join("\n"), "error");
+    return false;
+  }
+
+  const ready = await waitForOcxReady(90, 500);
+  if (!ready.ok) {
+    ctx.ui.notify([
+      "OpenCodex catalog sync completed, but readiness did not recover.",
+      ready.error ?? ready.stderr ?? "ocx ready failed",
+      "Run `ocx status --json` and `ocx ready --json` before retrying.",
+    ].join("\n"), "warning");
+    return false;
+  }
+
+  return true;
 }
 
 export async function runConfig(ctx: ExtensionCommandContext): Promise<void> {
@@ -132,9 +160,9 @@ const HELP = [
   "OpenCodex provider commands:",
   "  /opencodex status            Show ocx and provider/catalog status",
   "  /opencodex start             Start OpenCodex with `ocx start`, then refresh",
-  "  /opencodex refresh           Refresh OpenCodex models and models.dev metadata",
-  "  /opencodex refresh models    Refresh OpenCodex models only",
-  "  /opencodex refresh metadata  Refresh models.dev metadata only",
+  "  /opencodex refresh           Run `ocx sync`, refresh models, then refresh models.dev metadata",
+  "  /opencodex refresh models    Run `ocx sync`, then refresh OpenCodex models only",
+  "  /opencodex refresh metadata  Refresh models.dev metadata only; no `ocx sync`",
   "  /opencodex aliases           Show unmatched model IDs and metadata IDs",
   "  /opencodex config            Configure provider base URL/name/model prefix",
   "  /opencodex help              Show this help",
@@ -146,10 +174,15 @@ export function argumentCompletions(prefix: string): Array<{ value: string; labe
     .map((value) => ({ value, label: value }));
 }
 
-async function notifyRefresh(ctx: ExtensionCommandContext, result: CatalogRefreshResult): Promise<void> {
+async function notifyRefresh(
+  ctx: ExtensionCommandContext,
+  result: CatalogRefreshResult,
+  catalogSync: "completed" | "not requested" | "handled by ocx start",
+): Promise<void> {
   const level = result.models.error || result.metadata.error ? "warning" : "info";
   ctx.ui.notify([
     "pi-opencodex refresh complete.",
+    `OpenCodex catalog sync: ${catalogSync}`,
     refreshPart("OpenCodex models", result.models),
     refreshPart("models.dev metadata", result.metadata),
     `Registered: ${result.snapshot.built.stats.total} models, ${result.snapshot.built.stats.enriched} enriched, ${result.snapshot.built.stats.unmatched} unmatched.`,
@@ -208,7 +241,7 @@ export function registerOpenCodexCommand(pi: ExtensionAPI, runtime?: ProviderRun
           return;
         }
         const result = await runtime.refresh("all", "manual");
-        await notifyRefresh(ctx, result);
+        await notifyRefresh(ctx, result, "handled by ocx start");
         return;
       }
 
@@ -218,9 +251,14 @@ export function registerOpenCodexCommand(pi: ExtensionAPI, runtime?: ProviderRun
           ctx.ui.notify("Usage: /opencodex refresh [models|metadata]", "warning");
           return;
         }
-        if (target !== "metadata" && !(await requireReady(ctx))) return;
+
+        if (refreshRequiresOcxSync(target)) {
+          if (!(await requireReady(ctx))) return;
+          if (!(await syncOpenCodexCatalog(ctx))) return;
+        }
+
         const result = await runtime.refresh(target, "manual");
-        await notifyRefresh(ctx, result);
+        await notifyRefresh(ctx, result, refreshRequiresOcxSync(target) ? "completed" : "not requested");
         return;
       }
 
