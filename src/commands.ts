@@ -50,6 +50,7 @@ function parseRefreshTarget(value: string | undefined): RefreshTarget | undefine
 }
 
 function statusText(config: ReturnType<typeof loadConfig>, snapshot: CatalogSnapshot): string {
+  const metadataAge = snapshot.metadataUpdatedAt ? `, ${age(snapshot.metadataUpdatedAt)}` : "";
   return [
     `OpenCodex provider: ${config.providerName}`,
     `Base URL: ${config.baseUrl}`,
@@ -58,7 +59,7 @@ function statusText(config: ReturnType<typeof loadConfig>, snapshot: CatalogSnap
     `Reasoning models: ${capabilityCount(snapshot, "reasoning")}`,
     `Image-capable models: ${capabilityCount(snapshot, "image")}`,
     `OpenCodex model snapshot: ${age(snapshot.modelsUpdatedAt)}`,
-    `models.dev metadata: ${snapshot.metadataUpdatedAt ? age(snapshot.metadataUpdatedAt) : "missing"}`,
+    `models.dev metadata: ${snapshot.metadataSource}${metadataAge}`,
   ].join("\n");
 }
 
