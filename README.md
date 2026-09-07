@@ -158,7 +158,7 @@ Example:
 }
 ```
 
-## Cache
+## Cache and bundled metadata
 
 Runtime snapshots are local-only under:
 
@@ -166,12 +166,70 @@ Runtime snapshots are local-only under:
 ~/.cache/pi-opencodex/
 ```
 
-The package caches the last successful OpenCodex model list and models.dev catalog. Startup can register cached data immediately, then performs a short background refresh when `ocx ready --json` succeeds.
+The package caches the last successful OpenCodex model list and models.dev catalog. When no local models.dev cache exists it loads the committed `data/models-dev-fallback.json` snapshot, so metadata enrichment does not depend on models.dev being reachable during startup.
+
+If no OpenCodex model cache exists and `ocx ready --json` succeeds, first-run startup synchronously discovers the local `/v1/models` list before returning from extension initialization. Subsequent model/metadata refreshes happen in the background or through `/opencodex refresh`.
+
+Refresh the committed models.dev snapshot with:
+
+```bash
+npm run update:models-dev
+```
+
+Check whether it matches the current upstream catalog without writing it:
+
+```bash
+npm run update:models-dev -- --check
+```
 
 ## Development
 
+### Static checks
+
 ```bash
 npm install
-npm test
-npm run typecheck
+npm run check
 ```
+
+`npm run check` runs TypeScript type checking and the Node test suite. These tests cover config parsing, route-prefix stripping, metadata matching, and bundled metadata fallback behavior.
+
+### Run the local checkout directly in Pi
+
+Pi can load a package directly from a local directory without copying or publishing it. For an isolated extension smoke test, disable auto-discovered extensions and explicitly load this checkout:
+
+```bash
+pi -ne -e /absolute/path/to/pi-opencodex \
+  --provider opencodex \
+  --model 'rontian/glm-5.3-flash'
+```
+
+This is the preferred development loop when a Git-installed `pi-opencodex` may already exist globally, because `-ne` prevents the installed copy from being auto-loaded while `-e` loads the checkout under test.
+
+Inside Pi verify:
+
+```text
+/opencodex status
+/opencodex aliases
+/opencodex refresh
+/model
+```
+
+A non-interactive end-to-end model smoke test can be run with:
+
+```bash
+pi -ne -e /absolute/path/to/pi-opencodex \
+  --provider opencodex \
+  --model 'rontian/glm-5.3-flash' \
+  --no-session \
+  -p '只回复 OK'
+```
+
+To inspect the dynamically registered model catalog and its metadata:
+
+```bash
+pi -ne -e /absolute/path/to/pi-opencodex --list-models opencodex
+```
+
+For protocol/tool-call compatibility, also run a real prompt that requires one harmless Pi tool call, for example asking the model to run `pwd` and report the directory. That exercises the Pi -> pi-opencodex -> OpenCodex -> upstream round trip beyond a text-only completion.
+
+After editing the local package, restart the smoke-test Pi process for the most deterministic reload behavior.
