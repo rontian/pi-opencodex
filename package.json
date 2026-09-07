@@ -1,0 +1,53 @@
+{
+  "name": "pi-opencodex",
+  "version": "0.1.0",
+  "description": "Pi provider package for OpenCodex with dynamic model discovery and models.dev metadata enrichment.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "opencodex",
+    "provider",
+    "models.dev"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rontian/pi-opencodex.git"
+  },
+  "homepage": "https://github.com/rontian/pi-opencodex#readme",
+  "files": [
+    "src",
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.0"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "typescript": "^5.9.3",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
