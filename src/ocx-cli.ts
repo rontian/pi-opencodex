@@ -41,6 +41,10 @@ export async function ocxStart(): Promise<OcxCommandResult> {
   return runOcx(["start"], 30_000);
 }
 
+export async function ocxSync(): Promise<OcxCommandResult> {
+  return runOcx(["sync"], 120_000);
+}
+
 export async function waitForOcxReady(attempts = 20, delayMs = 250): Promise<OcxCommandResult> {
   let last = await ocxReady();
   for (let i = 1; i < attempts && !last.ok; i += 1) {
