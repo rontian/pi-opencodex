@@ -129,9 +129,19 @@ To disable prefix stripping:
 
 `status` uses `ocx ready --json` and `ocx status --json` for OpenCodex lifecycle diagnostics.
 
-`start` invokes `ocx start`, waits for readiness, then refreshes the Pi provider.
+`start` invokes `ocx start`, waits for readiness, then refreshes the Pi provider. OpenCodex itself synchronizes provider models during `ocx start`, so the package does not run a second `ocx sync` in this path.
 
-`refresh` checks OpenCodex readiness, reloads the OpenCodex model list, refreshes models.dev metadata, and republishes the dynamic Pi provider. Pi's own model refresh hook also refreshes the OpenCodex model list.
+The three refresh forms have intentionally different scopes:
+
+| Command | `ocx sync` | `GET /v1/models` | models.dev |
+| --- | --- | --- | --- |
+| `/opencodex refresh` | yes | yes | yes |
+| `/opencodex refresh models` | yes | yes | no |
+| `/opencodex refresh metadata` | no | no | yes |
+
+For model or full refresh, the package first runs `ocx sync`, waits for OpenCodex readiness, then reloads `/v1/models` and republishes the dynamic Pi provider. Metadata-only refresh updates the models.dev catalog without touching OpenCodex provider discovery.
+
+Startup/background refresh and Pi's provider `refreshModels` hook intentionally do **not** run `ocx sync`; they only read the current OpenCodex `/v1/models` catalog. This avoids turning ordinary Pi startup or model-picker refreshes into upstream provider discovery with extra network/write side effects. Use an explicit `/opencodex refresh` or `/opencodex refresh models` when the OpenCodex provider catalog itself may have changed.
 
 ## Metadata matching
 
@@ -140,7 +150,7 @@ The package follows the matching approach from `0xRichardH/pi-cliproxyapi-provid
 ```text
 explicit alias
 -> exact id
--> owner prefix / owner hint
+-> owner prefix
 -> suffix
 -> normalized suffix
 -> configured fallback provider (default: openrouter)
@@ -168,7 +178,7 @@ Runtime snapshots are local-only under:
 
 The package caches the last successful OpenCodex model list and models.dev catalog. When no local models.dev cache exists it loads the committed `data/models-dev-fallback.json` snapshot, so metadata enrichment does not depend on models.dev being reachable during startup.
 
-If no OpenCodex model cache exists and `ocx ready --json` succeeds, first-run startup synchronously discovers the local `/v1/models` list before returning from extension initialization. Subsequent model/metadata refreshes happen in the background or through `/opencodex refresh`.
+If no OpenCodex model cache exists and `ocx ready --json` succeeds, first-run startup synchronously discovers the local `/v1/models` list before returning from extension initialization. Later startup/background refreshes read the current OpenCodex catalog without running `ocx sync`; explicit `/opencodex refresh` commands provide the upstream discovery path when needed.
 
 Refresh the committed models.dev snapshot with:
 
@@ -191,7 +201,7 @@ npm install
 npm run check
 ```
 
-`npm run check` runs TypeScript type checking and the Node test suite. These tests cover config parsing, route-prefix stripping, metadata matching, and bundled metadata fallback behavior.
+`npm run check` runs TypeScript type checking and the Node test suite. These tests cover config parsing, route-prefix stripping, metadata matching, bundled metadata fallback behavior, and explicit refresh/catalog-sync semantics.
 
 ### Run the local checkout directly in Pi
 
