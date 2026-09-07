@@ -24,12 +24,22 @@ export default async function (pi: ExtensionAPI) {
     catalog = new ProviderCatalog(config, { bundledModelsDevPath });
     runtime = new ProviderRuntime({ pi, config, catalog });
     registerOpenCodexCommand(pi, runtime, catalog);
-    await runtime.start();
+    const initial = await runtime.start();
+
+    const ready = await ocxReady();
+    if (!ready.ok) return;
+
+    let firstRunModelsLoaded = false;
+    if (initial.availableModels.length === 0) {
+      const firstRun = await runtime.refresh("models", "background");
+      firstRunModelsLoaded = firstRun.models.updated;
+      if (firstRun.models.error) {
+        console.warn("[pi-opencodex] first-run OpenCodex model discovery failed; placeholder provider remains until refresh succeeds");
+      }
+    }
 
     void (async () => {
-      const ready = await ocxReady();
-      if (!ready.ok) return;
-      const result = await runtime!.refresh("all", "background");
+      const result = await runtime!.refresh(firstRunModelsLoaded ? "metadata" : "all", "background");
       if (result.models.error || result.metadata.error) {
         console.warn("[pi-opencodex] background refresh retained cached or bundled data after a refresh failure");
       }
