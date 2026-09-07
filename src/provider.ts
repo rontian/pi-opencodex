@@ -6,6 +6,7 @@ import { cacheDir, type ModelOverride, type OpenCodexProviderConfig } from "./co
 export type InputModality = "text" | "image";
 export type RefreshTarget = "models" | "metadata" | "all";
 export type RefreshMode = "background" | "manual";
+export type MetadataSource = "cache" | "bundled" | "missing" | "disabled";
 
 export interface OpenCodexModel {
   id: string;
@@ -66,6 +67,7 @@ export interface CatalogSnapshot {
   modelsUpdatedAt?: number;
   metadata: ModelsDevCatalog;
   metadataUpdatedAt?: number;
+  metadataSource: MetadataSource;
   built: {
     models: PiProviderModel[];
     stats: {
@@ -91,20 +93,33 @@ export interface CatalogRefreshResult {
   metadata: SourceRefreshResult;
 }
 
+export interface ProviderCatalogOptions {
+  bundledModelsDevPath?: string;
+}
+
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 16_384;
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 const OWNER_MAP: Record<string, string> = {
-  openai: "openai", anthropic: "anthropic", google: "google", deepseek: "deepseek",
-  xai: "xai", zhipuai: "zhipuai", alibaba: "alibaba", moonshotai: "moonshotai", minimax: "minimax",
+  openai: "openai",
+  anthropic: "anthropic",
+  google: "google",
+  deepseek: "deepseek",
+  xai: "xai",
+  zhipuai: "zhipuai",
+  alibaba: "alibaba",
+  moonshotai: "moonshotai",
+  minimax: "minimax",
 };
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`).join(",")}}`;
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value);
 }
@@ -142,7 +157,8 @@ async function fetchJson(url: string, timeoutMs: number, signal?: AbortSignal): 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error(`request timed out after ${timeoutMs}ms`)), timeoutMs);
   const abort = () => controller.abort(signal?.reason ?? new Error("request aborted"));
-  if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
   try {
     const response = await fetch(url, { headers: { Accept: "application/json" }, signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
@@ -179,7 +195,8 @@ function parseModelRows(entries: unknown[], modelPrefix: string): OpenCodexModel
 
 export function parseOpenCodexModelsResponse(payload: unknown, modelPrefix = "rontian/"): OpenCodexModel[] {
   const data = payload && typeof payload === "object" && !Array.isArray(payload)
-    ? (payload as { data?: unknown }).data : undefined;
+    ? (payload as { data?: unknown }).data
+    : undefined;
   if (!Array.isArray(data)) throw new Error("OpenCodex /v1/models response must contain a data array");
   return parseModelRows(data, modelPrefix);
 }
@@ -189,7 +206,11 @@ function parseModelCache(payload: unknown, prefix: string): OpenCodexModel[] {
   return parseModelRows(payload, prefix);
 }
 
-export async function fetchOpenCodexModels(config: Pick<OpenCodexProviderConfig, "baseUrl" | "modelPrefix">, timeoutMs: number, signal?: AbortSignal): Promise<OpenCodexModel[]> {
+export async function fetchOpenCodexModels(
+  config: Pick<OpenCodexProviderConfig, "baseUrl" | "modelPrefix">,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<OpenCodexModel[]> {
   return parseOpenCodexModelsResponse(await fetchJson(modelsEndpoint(config.baseUrl), timeoutMs, signal), config.modelPrefix);
 }
 
@@ -197,25 +218,54 @@ function isMetadata(value: unknown): value is ModelsDevMetadata {
   return !!value && typeof value === "object" && !Array.isArray(value) && typeof (value as { id?: unknown }).id === "string";
 }
 
+/**
+ * Accept both the raw models.dev API shape and our flattened persisted snapshot.
+ * The latter matters because refresh writes the enriched catalog to cache and the
+ * next Pi process must be able to read it back without losing metadata.
+ */
 export function parseModelsDevCatalog(payload: unknown): ModelsDevCatalog {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("models.dev catalog must be an object");
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("models.dev catalog must be an object");
+  }
+
+  const record = payload as Record<string, unknown>;
   const result: ModelsDevCatalog = {};
-  for (const [providerId, rawProvider] of Object.entries(payload as Record<string, unknown>)) {
+
+  for (const [providerId, rawProvider] of Object.entries(record)) {
     const models = rawProvider && typeof rawProvider === "object" && !Array.isArray(rawProvider)
-      ? (rawProvider as { models?: unknown }).models : undefined;
-    if (!models || typeof models !== "object" || Array.isArray(models)) continue;
-    for (const [modelId, rawMetadata] of Object.entries(models as Record<string, unknown>)) {
-      if (!isMetadata(rawMetadata)) continue;
-      const canonical = rawMetadata.id.includes("/") ? rawMetadata.id : `${providerId}/${modelId}`;
-      const key = canonical.startsWith(`${providerId}/`) ? canonical : `${providerId}/${canonical}`;
-      result[key] = { ...rawMetadata, id: canonical, sourceProvider: providerId };
+      ? (rawProvider as { models?: unknown }).models
+      : undefined;
+
+    if (models && typeof models === "object" && !Array.isArray(models)) {
+      for (const [modelId, rawMetadata] of Object.entries(models as Record<string, unknown>)) {
+        if (!isMetadata(rawMetadata)) continue;
+        const canonicalId = rawMetadata.id.includes("/") ? rawMetadata.id : `${providerId}/${modelId}`;
+        const catalogKey = canonicalId.startsWith(`${providerId}/`) ? canonicalId : `${providerId}/${canonicalId}`;
+        result[catalogKey] = { ...rawMetadata, id: canonicalId, sourceProvider: providerId };
+      }
+      continue;
     }
+
+    if (isMetadata(rawProvider)) {
+      result[providerId] = {
+        ...rawProvider,
+        sourceProvider: rawProvider.sourceProvider ?? providerId.split("/")[0],
+      };
+    }
+  }
+
+  if (Object.keys(result).length === 0 && Object.keys(record).length > 0) {
+    throw new Error("models.dev catalog contained no valid models");
   }
   return result;
 }
 
 export async function fetchModelsDevCatalog(timeoutMs: number, signal?: AbortSignal): Promise<ModelsDevCatalog> {
   return parseModelsDevCatalog(await fetchJson(MODELS_DEV_URL, timeoutMs, signal));
+}
+
+export async function readBundledModelsDevFallback(path: string): Promise<ModelsDevCatalog> {
+  return parseModelsDevCatalog(JSON.parse(await readFile(path, "utf8")));
 }
 
 function modelName(key: string, metadata: ModelsDevMetadata): string {
@@ -262,7 +312,10 @@ export function findMetadataMatch(
   if (normalizedKey) return { metadata: catalog[normalizedKey], method: "normalized-suffix" };
 
   if (fallbackProvider) {
-    const fallback = unique(normalizedMatches.filter((key) => (catalog[key].sourceProvider ?? key.split("/")[0]).toLowerCase() === fallbackProvider.toLowerCase()));
+    const fallback = unique(normalizedMatches.filter((key) => {
+      const source = catalog[key].sourceProvider ?? key.split("/")[0];
+      return source.toLowerCase() === fallbackProvider.toLowerCase();
+    }));
     if (fallback) return { metadata: catalog[fallback], method: "provider-fallback" };
   }
   return undefined;
@@ -271,17 +324,29 @@ export function findMetadataMatch(
 function gpt56Thinking(model: OpenCodexModel, metadata?: ModelsDevMetadata): PiProviderModel["thinkingLevelMap"] | undefined {
   const ids = [model.id, model.metadataId, metadata?.id].filter((id): id is string => !!id);
   if (!ids.some((id) => /(^|\/)gpt-5\.6(?:-|$)/.test(id))) return undefined;
-  return { off: "none", minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+  return {
+    off: "none",
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  };
 }
 
 function cost(metadata: ModelsDevMetadata): PiProviderModel["cost"] {
-  const tiers = metadata.cost?.tiers?.flatMap((tier) => tier.tier?.type === "context" && typeof tier.tier.size === "number" ? [{
-    inputTokensAbove: tier.tier.size,
-    input: tier.input ?? 0,
-    output: tier.output ?? 0,
-    cacheRead: tier.cache_read ?? 0,
-    cacheWrite: tier.cache_write ?? 0,
-  }] : []);
+  const tiers = metadata.cost?.tiers?.flatMap((tier) =>
+    tier.tier?.type === "context" && typeof tier.tier.size === "number"
+      ? [{
+          inputTokensAbove: tier.tier.size,
+          input: tier.input ?? 0,
+          output: tier.output ?? 0,
+          cacheRead: tier.cache_read ?? 0,
+          cacheWrite: tier.cache_write ?? 0,
+        }]
+      : [],
+  );
   return {
     input: metadata.cost?.input ?? 0,
     output: metadata.cost?.output ?? 0,
@@ -292,12 +357,14 @@ function cost(metadata: ModelsDevMetadata): PiProviderModel["cost"] {
 }
 
 function applyOverride(model: PiProviderModel, override?: ModelOverride): PiProviderModel {
-  return override ? {
-    ...model,
-    ...(override.reasoning !== undefined ? { reasoning: override.reasoning } : {}),
-    ...(override.contextWindow !== undefined ? { contextWindow: override.contextWindow } : {}),
-    ...(override.maxTokens !== undefined ? { maxTokens: override.maxTokens } : {}),
-  } : model;
+  return override
+    ? {
+        ...model,
+        ...(override.reasoning !== undefined ? { reasoning: override.reasoning } : {}),
+        ...(override.contextWindow !== undefined ? { contextWindow: override.contextWindow } : {}),
+        ...(override.maxTokens !== undefined ? { maxTokens: override.maxTokens } : {}),
+      }
+    : model;
 }
 
 function makeModel(model: OpenCodexModel, metadata?: ModelsDevMetadata): PiProviderModel {
@@ -315,7 +382,14 @@ function makeModel(model: OpenCodexModel, metadata?: ModelsDevMetadata): PiProvi
 }
 
 function emptyMethods(): Record<MetadataMatchMethod, number> {
-  return { alias: 0, exact: 0, "owner-prefix": 0, suffix: 0, "normalized-suffix": 0, "provider-fallback": 0 };
+  return {
+    alias: 0,
+    exact: 0,
+    "owner-prefix": 0,
+    suffix: 0,
+    "normalized-suffix": 0,
+    "provider-fallback": 0,
+  };
 }
 
 export function buildProviderModels(
@@ -326,76 +400,188 @@ export function buildProviderModels(
   const matchMethods = emptyMethods();
   const unmatchedModelIds: string[] = [];
   let enriched = 0;
+
   const models = available.map((model) => {
     const match = findMetadataMatch(model, metadata, config.modelAliases, config.metadataFallbackProvider);
     if (!match) unmatchedModelIds.push(model.id);
-    else { enriched += 1; matchMethods[match.method] += 1; }
-    return applyOverride(makeModel(model, match?.metadata), config.modelOverrides[model.id] ?? config.modelOverrides[model.metadataId]);
+    else {
+      enriched += 1;
+      matchMethods[match.method] += 1;
+    }
+    return applyOverride(
+      makeModel(model, match?.metadata),
+      config.modelOverrides[model.id] ?? config.modelOverrides[model.metadataId],
+    );
   });
-  return { models, stats: { total: models.length, enriched, unmatched: unmatchedModelIds.length, unmatchedModelIds, matchMethods } };
+
+  return {
+    models,
+    stats: {
+      total: models.length,
+      enriched,
+      unmatched: unmatchedModelIds.length,
+      unmatchedModelIds,
+      matchMethods,
+    },
+  };
 }
 
 export function buildUnavailableProviderModels(): PiProviderModel[] {
-  return [{ id: "opencodex-unavailable", name: "OpenCodex unavailable", reasoning: false, input: ["text"], cost: { ...ZERO_COST }, contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS }];
+  return [{
+    id: "opencodex-unavailable",
+    name: "OpenCodex unavailable",
+    reasoning: false,
+    input: ["text"],
+    cost: { ...ZERO_COST },
+    contextWindow: DEFAULT_CONTEXT_WINDOW,
+    maxTokens: DEFAULT_MAX_TOKENS,
+  }];
 }
 
 export class ProviderCatalog {
   private snapshot?: CatalogSnapshot;
   private readonly config: OpenCodexProviderConfig;
-  constructor(config: OpenCodexProviderConfig) { this.config = config; }
+  private readonly options: ProviderCatalogOptions;
 
-  current(): CatalogSnapshot | undefined { return this.snapshot; }
-
-  async load(): Promise<CatalogSnapshot> {
-    const models = await readCache(modelCachePath(this.config), (value) => parseModelCache(value, this.config.modelPrefix));
-    const metadata = this.config.modelsDevEnabled ? await readCache(metadataCachePath(), parseModelsDevCatalog) : undefined;
-    return this.set(models?.data ?? [], models?.fetchedAt, metadata?.data ?? {}, metadata?.fetchedAt);
+  constructor(config: OpenCodexProviderConfig, options: ProviderCatalogOptions = {}) {
+    this.config = config;
+    this.options = options;
   }
 
-  async refresh(target: RefreshTarget = "all", mode: RefreshMode = "manual", signal?: AbortSignal): Promise<CatalogRefreshResult> {
+  current(): CatalogSnapshot | undefined {
+    return this.snapshot;
+  }
+
+  async load(): Promise<CatalogSnapshot> {
+    const models = await readCache(
+      modelCachePath(this.config),
+      (value) => parseModelCache(value, this.config.modelPrefix),
+    );
+
+    if (!this.config.modelsDevEnabled) {
+      return this.set(models?.data ?? [], models?.fetchedAt, {}, undefined, "disabled");
+    }
+
+    const cachedMetadata = await readCache(metadataCachePath(), parseModelsDevCatalog);
+    if (cachedMetadata) {
+      return this.set(
+        models?.data ?? [],
+        models?.fetchedAt,
+        cachedMetadata.data,
+        cachedMetadata.fetchedAt,
+        "cache",
+      );
+    }
+
+    if (this.options.bundledModelsDevPath) {
+      try {
+        const bundled = await readBundledModelsDevFallback(this.options.bundledModelsDevPath);
+        return this.set(models?.data ?? [], models?.fetchedAt, bundled, undefined, "bundled");
+      } catch {
+        // A missing or invalid bundled file should not block Pi startup. Network
+        // refresh still gets a chance to populate the durable cache.
+      }
+    }
+
+    return this.set(models?.data ?? [], models?.fetchedAt, {}, undefined, "missing");
+  }
+
+  async refresh(
+    target: RefreshTarget = "all",
+    mode: RefreshMode = "manual",
+    signal?: AbortSignal,
+  ): Promise<CatalogRefreshResult> {
     const current = this.snapshot ?? await this.load();
     let available = current.availableModels;
     let modelsUpdatedAt = current.modelsUpdatedAt;
     let metadata = current.metadata;
     let metadataUpdatedAt = current.metadataUpdatedAt;
-    const models: SourceRefreshResult = { attempted: target !== "metadata", updated: false, changed: false };
-    const meta: SourceRefreshResult = { attempted: target !== "models" && this.config.modelsDevEnabled, updated: false, changed: false };
+    let metadataSource = current.metadataSource;
+
+    const models: SourceRefreshResult = {
+      attempted: target !== "metadata",
+      updated: false,
+      changed: false,
+    };
+    const meta: SourceRefreshResult = {
+      attempted: target !== "models" && this.config.modelsDevEnabled,
+      updated: false,
+      changed: false,
+    };
 
     if (models.attempted) {
       try {
-        const fresh = await fetchOpenCodexModels(this.config, mode === "background" ? 2_500 : 10_000, signal);
-        if (mode === "background" && current.availableModels.length && !fresh.length) throw new Error("OpenCodex returned an empty model list");
+        const fresh = await fetchOpenCodexModels(
+          this.config,
+          mode === "background" ? 2_500 : 10_000,
+          signal,
+        );
+        if (mode === "background" && current.availableModels.length && !fresh.length) {
+          throw new Error("OpenCodex returned an empty model list");
+        }
         models.changed = stable(fresh) !== stable(current.availableModels);
         modelsUpdatedAt = Date.now();
         await writeCache(modelCachePath(this.config), fresh, modelsUpdatedAt);
         available = fresh;
         models.updated = true;
-      } catch (error) { models.error = error; }
+      } catch (error) {
+        models.error = error;
+      }
     }
 
     if (meta.attempted) {
       try {
-        const fresh = await fetchModelsDevCatalog(mode === "background" ? 5_000 : 12_000, signal);
+        const fresh = await fetchModelsDevCatalog(
+          mode === "background" ? 5_000 : 12_000,
+          signal,
+        );
         meta.changed = stable(fresh) !== stable(current.metadata);
         metadataUpdatedAt = Date.now();
         await writeCache(metadataCachePath(), fresh, metadataUpdatedAt);
         metadata = fresh;
+        metadataSource = "cache";
         meta.updated = true;
-      } catch (error) { meta.error = error; }
+      } catch (error) {
+        meta.error = error;
+      }
     }
 
-    return { snapshot: this.set(available, modelsUpdatedAt, metadata, metadataUpdatedAt), models, metadata: meta };
+    return {
+      snapshot: this.set(available, modelsUpdatedAt, metadata, metadataUpdatedAt, metadataSource),
+      models,
+      metadata: meta,
+    };
   }
 
-  private set(availableModels: OpenCodexModel[], modelsUpdatedAt: number | undefined, metadata: ModelsDevCatalog, metadataUpdatedAt: number | undefined): CatalogSnapshot {
-    return this.snapshot = { availableModels, modelsUpdatedAt, metadata, metadataUpdatedAt, built: buildProviderModels(availableModels, metadata, this.config) };
+  private set(
+    availableModels: OpenCodexModel[],
+    modelsUpdatedAt: number | undefined,
+    metadata: ModelsDevCatalog,
+    metadataUpdatedAt: number | undefined,
+    metadataSource: MetadataSource,
+  ): CatalogSnapshot {
+    return this.snapshot = {
+      availableModels,
+      modelsUpdatedAt,
+      metadata,
+      metadataUpdatedAt,
+      metadataSource,
+      built: buildProviderModels(availableModels, metadata, this.config),
+    };
   }
 }
 
 export class ProviderRuntime {
   private fingerprint?: string;
-  private readonly options: { pi: ExtensionAPI; config: OpenCodexProviderConfig; catalog: ProviderCatalog };
-  constructor(options: { pi: ExtensionAPI; config: OpenCodexProviderConfig; catalog: ProviderCatalog }) { this.options = options; }
+  private readonly options: {
+    pi: ExtensionAPI;
+    config: OpenCodexProviderConfig;
+    catalog: ProviderCatalog;
+  };
+
+  constructor(options: { pi: ExtensionAPI; config: OpenCodexProviderConfig; catalog: ProviderCatalog }) {
+    this.options = options;
+  }
 
   async start(): Promise<CatalogSnapshot> {
     const snapshot = await this.options.catalog.load();
@@ -403,25 +589,42 @@ export class ProviderRuntime {
     return snapshot;
   }
 
-  async refresh(target: RefreshTarget = "all", mode: RefreshMode = "manual", signal?: AbortSignal): Promise<CatalogRefreshResult> {
+  async refresh(
+    target: RefreshTarget = "all",
+    mode: RefreshMode = "manual",
+    signal?: AbortSignal,
+  ): Promise<CatalogRefreshResult> {
     const result = await this.options.catalog.refresh(target, mode, signal);
     if (result.models.updated || result.metadata.updated) this.register(result.snapshot, false);
     return result;
   }
 
-  async refreshModels(context: { allowNetwork: boolean; force?: boolean; signal?: AbortSignal }): Promise<PiProviderModel[]> {
+  async refreshModels(context: {
+    allowNetwork: boolean;
+    force?: boolean;
+    signal?: AbortSignal;
+  }): Promise<PiProviderModel[]> {
     if (!context.allowNetwork) {
       const snapshot = await this.options.catalog.load();
       return snapshot.built.models.length ? snapshot.built.models : buildUnavailableProviderModels();
     }
-    const result = await this.options.catalog.refresh("models", context.force ? "manual" : "background", context.signal);
-    return result.snapshot.built.models.length ? result.snapshot.built.models : buildUnavailableProviderModels();
+    const result = await this.options.catalog.refresh(
+      "models",
+      context.force ? "manual" : "background",
+      context.signal,
+    );
+    return result.snapshot.built.models.length
+      ? result.snapshot.built.models
+      : buildUnavailableProviderModels();
   }
 
   private register(snapshot: CatalogSnapshot, force: boolean): void {
-    const models = snapshot.built.models.length ? snapshot.built.models : buildUnavailableProviderModels();
+    const models = snapshot.built.models.length
+      ? snapshot.built.models
+      : buildUnavailableProviderModels();
     const next = stable(models);
     if (!force && next === this.fingerprint) return;
+
     this.options.pi.registerProvider(this.options.config.providerName, {
       name: `OpenCodex (${this.options.config.providerName})`,
       baseUrl: this.options.config.baseUrl,
@@ -429,7 +632,8 @@ export class ProviderRuntime {
       apiKey: "opencodex-loopback",
       authHeader: false,
       models,
-      refreshModels: (context: { allowNetwork: boolean; force?: boolean; signal?: AbortSignal }) => this.refreshModels(context),
+      refreshModels: (context: { allowNetwork: boolean; force?: boolean; signal?: AbortSignal }) =>
+        this.refreshModels(context),
     });
     this.fingerprint = next;
   }
