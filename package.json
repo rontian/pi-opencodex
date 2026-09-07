@@ -1,6 +1,6 @@
 {
   "name": "pi-opencodex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pi provider package for OpenCodex with dynamic model discovery and models.dev metadata enrichment.",
   "type": "module",
   "license": "MIT",
