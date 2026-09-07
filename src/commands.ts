@@ -64,7 +64,7 @@ function statusText(config: ReturnType<typeof loadConfig>, snapshot: CatalogSnap
 
 function summarizeOcx(label: string, result: Awaited<ReturnType<typeof ocxReady>>): string {
   if (result.ok) return `${label}: ok${result.stdout ? `\n${result.stdout}` : ""}`;
-  return `${label}: failed (${result.error ?? result.stderr || "unknown error"})`;
+  return `${label}: failed (${result.error ?? result.stderr ?? "unknown error"})`;
 }
 
 async function requireReady(ctx: ExtensionCommandContext): Promise<boolean> {
