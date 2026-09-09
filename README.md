@@ -170,7 +170,7 @@ The three refresh forms have intentionally different scopes:
 
 For model or full refresh, the package first runs `ocx sync`, waits for OpenCodex readiness, then reloads `/v1/models` and republishes the dynamic Pi provider. Metadata-only refresh updates the models.dev catalog without touching OpenCodex provider discovery.
 
-Startup/background refresh and Pi's provider `refreshModels` hook intentionally do **not** run `ocx sync`; they only read the current OpenCodex `/v1/models` catalog. This avoids turning ordinary Pi startup or model-picker refreshes into upstream provider discovery with extra network/write side effects. Use an explicit `/opencodex refresh` or `/opencodex refresh models` when the OpenCodex provider catalog itself may have changed.
+Startup/background refresh and Pi's provider `refreshModels` hook intentionally do **not** run `ocx sync`. Ordinary Pi startup always registers the provider from local cache/bundled data first, then may refresh the current local OpenCodex `/v1/models` catalog. `models.dev` is not fetched on every Pi startup: metadata refresh is freshness-gated to at most one background attempt per 24 hours across Pi processes. Background refresh failures are silent because the already-registered cache/bundled snapshot remains usable. Use an explicit `/opencodex refresh` or `/opencodex refresh metadata` when you want an immediate metadata refresh with visible success/failure details.
 
 ## Metadata matching
 
@@ -205,9 +205,11 @@ Runtime snapshots are local-only under:
 ~/.cache/pi-opencodex/
 ```
 
-The package caches the last successful OpenCodex model list and models.dev catalog. When no local models.dev cache exists it loads the committed `data/models-dev-fallback.json` snapshot, so metadata enrichment does not depend on models.dev being reachable during startup.
+The package caches the last successful OpenCodex model list and models.dev catalog. It also stores a small local timestamp for the last automatic models.dev refresh attempt, so multiple Pi processes do not all retry the same external metadata request on startup. When no local models.dev cache exists it loads the committed `data/models-dev-fallback.json` snapshot, so metadata enrichment does not depend on models.dev being reachable during startup.
 
-If no OpenCodex model cache exists and `ocx ready --json` succeeds, first-run startup synchronously discovers the local `/v1/models` list before returning from extension initialization. Later startup/background refreshes read the current OpenCodex catalog without running `ocx sync`; explicit `/opencodex refresh` commands provide the upstream discovery path when needed.
+A successful models.dev cache younger than 24 hours is used without any startup network request. If metadata is stale, bundled, or missing, startup may make one opportunistic background refresh attempt per 24 hours. If that request fails, Pi keeps using the existing cache or bundled fallback and does not write a warning into the TUI. Manual `/opencodex refresh` and `/opencodex refresh metadata` bypass this background cadence and continue to report concrete errors to the user.
+
+If no OpenCodex model cache exists and `ocx ready --json` succeeds, first-run startup synchronously discovers the local `/v1/models` list before returning from extension initialization. Later startup/background refreshes may read the current OpenCodex catalog without running `ocx sync`; explicit `/opencodex refresh` commands provide the upstream discovery path when needed.
 
 Refresh the committed models.dev snapshot with:
 
@@ -230,7 +232,7 @@ npm install
 npm run check
 ```
 
-`npm run check` runs TypeScript type checking and the Node test suite. These tests cover config parsing, route-prefix stripping, metadata matching, context-window policy, bundled metadata fallback behavior, and explicit refresh/catalog-sync semantics.
+`npm run check` runs TypeScript type checking and the Node test suite. These tests cover config parsing, route-prefix stripping, metadata matching, context-window policy, bundled metadata fallback behavior, startup metadata freshness/backoff policy, and explicit refresh/catalog-sync semantics.
 
 ### Run the local checkout directly in Pi
 

@@ -9,6 +9,12 @@ import {
   ProviderCatalog,
   ProviderRuntime,
 } from "../src/provider.ts";
+import {
+  markMetadataBackgroundRefreshAttempt,
+  readLastMetadataBackgroundRefreshAttempt,
+  shouldBackgroundRefreshMetadata,
+  startupRefreshTarget,
+} from "../src/startup-refresh.ts";
 
 const extensionDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(extensionDir);
@@ -38,12 +44,32 @@ export default async function (pi: ExtensionAPI) {
       }
     }
 
-    void (async () => {
-      const result = await runtime!.refresh(firstRunModelsLoaded ? "metadata" : "all", "background");
-      if (result.models.error || result.metadata.error) {
-        console.warn("[pi-opencodex] background refresh retained cached or bundled data after a refresh failure");
+    const snapshot = catalog.current() ?? initial;
+    const lastMetadataAttemptAt = await readLastMetadataBackgroundRefreshAttempt();
+    const refreshMetadata = shouldBackgroundRefreshMetadata(snapshot, Date.now(), lastMetadataAttemptAt);
+    const target = startupRefreshTarget(firstRunModelsLoaded, refreshMetadata);
+
+    if (refreshMetadata) {
+      try {
+        await markMetadataBackgroundRefreshAttempt();
+      } catch {
+        // Refresh-state persistence is only an optimization. A cache directory
+        // problem must not prevent the provider from trying to refresh.
       }
-    })();
+    }
+
+    if (target) {
+      void (async () => {
+        try {
+          // Startup refresh is opportunistic. Cached/bundled data is already
+          // registered, so network failures must never surface in the Pi TUI.
+          await runtime!.refresh(target, "background");
+        } catch {
+          // Manual /opencodex refresh commands remain the explicit path that
+          // reports refresh failures to the user.
+        }
+      })();
+    }
   } catch (error) {
     registerOpenCodexCommand(pi, runtime, catalog);
     pi.registerProvider(config.providerName, {
