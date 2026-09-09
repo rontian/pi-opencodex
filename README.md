@@ -56,6 +56,7 @@ No npm or pi.dev publication is required.
   "modelPrefix": "rontian/",
   "modelsDevEnabled": true,
   "metadataFallbackProvider": "openrouter",
+  "contextWindowCap": 272000,
   "modelAliases": {},
   "modelOverrides": {}
 }
@@ -73,7 +74,7 @@ Project metadata-only overrides are supported at:
 <project>/.pi/pi-opencodex/config.json
 ```
 
-Project config can only change `metadataFallbackProvider`, `modelAliases`, and `modelOverrides`; connection identity remains user-level.
+Project config can only change `metadataFallbackProvider`, `modelAliases`, and `modelOverrides`; connection identity and the global context-window policy remain user-level.
 
 Environment overrides:
 
@@ -84,6 +85,34 @@ PI_OPENCODEX_MODEL_PREFIX
 PI_OPENCODEX_MODELS_DEV_ENABLED
 PI_OPENCODEX_METADATA_FALLBACK_PROVIDER
 ```
+
+## Working context window
+
+`models.dev` still provides the model's physical context limit, but very large physical windows are not used as Pi's default working window. By default, the registered Pi `contextWindow` is:
+
+```text
+min(models.dev physical context, contextWindowCap)
+```
+
+The default `contextWindowCap` is `272000` tokens. With Pi's default `reserveTokens = 16384`, automatic compaction starts at roughly `255616` tokens instead of letting a long-running Agent session grow toward a 1M-token physical limit.
+
+Change the global cap in `~/.pi/agent/pi-opencodex/config.json` when a different working window is desired:
+
+```json
+{
+  "contextWindowCap": 512000
+}
+```
+
+Set it to `null` to disable the global cap and register the physical model context from metadata:
+
+```json
+{
+  "contextWindowCap": null
+}
+```
+
+A per-model `modelOverrides.<model>.contextWindow` is applied after the global cap. This remains the explicit escape hatch for correcting metadata or opting a specific model/project into a larger working window without raising the default for every model.
 
 ## Prefix behavior
 
@@ -201,7 +230,7 @@ npm install
 npm run check
 ```
 
-`npm run check` runs TypeScript type checking and the Node test suite. These tests cover config parsing, route-prefix stripping, metadata matching, bundled metadata fallback behavior, and explicit refresh/catalog-sync semantics.
+`npm run check` runs TypeScript type checking and the Node test suite. These tests cover config parsing, route-prefix stripping, metadata matching, context-window policy, bundled metadata fallback behavior, and explicit refresh/catalog-sync semantics.
 
 ### Run the local checkout directly in Pi
 

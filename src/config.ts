@@ -14,11 +14,14 @@ export interface OpenCodexProviderConfig {
   modelPrefix: string;
   modelsDevEnabled: boolean;
   metadataFallbackProvider: string | null;
+  contextWindowCap: number | null;
   modelAliases: Record<string, string>;
   modelOverrides: Record<string, ModelOverride>;
 }
 
 export type ConfigLayer = Partial<OpenCodexProviderConfig>;
+
+export const DEFAULT_CONTEXT_WINDOW_CAP = 272_000;
 
 export const DEFAULT_CONFIG: OpenCodexProviderConfig = {
   providerName: "opencodex",
@@ -26,6 +29,7 @@ export const DEFAULT_CONFIG: OpenCodexProviderConfig = {
   modelPrefix: "rontian/",
   modelsDevEnabled: true,
   metadataFallbackProvider: "openrouter",
+  contextWindowCap: DEFAULT_CONTEXT_WINDOW_CAP,
   modelAliases: {},
   modelOverrides: {},
 };
@@ -68,7 +72,7 @@ function validateLayer(value: unknown, path: string, project = false): ConfigLay
   const record = value as Record<string, unknown>;
   const allowed = project
     ? new Set(["metadataFallbackProvider", "modelAliases", "modelOverrides"])
-    : new Set(["providerName", "baseUrl", "modelPrefix", "modelsDevEnabled", "metadataFallbackProvider", "modelAliases", "modelOverrides"]);
+    : new Set(["providerName", "baseUrl", "modelPrefix", "modelsDevEnabled", "metadataFallbackProvider", "contextWindowCap", "modelAliases", "modelOverrides"]);
   const unknown = Object.keys(record).filter((key) => !allowed.has(key));
   if (unknown.length > 0) throw new Error(`Unsupported config fields in ${path}: ${unknown.join(", ")}`);
 
@@ -83,6 +87,10 @@ function validateLayer(value: unknown, path: string, project = false): ConfigLay
   if (record.metadataFallbackProvider !== undefined && record.metadataFallbackProvider !== null
     && (typeof record.metadataFallbackProvider !== "string" || !record.metadataFallbackProvider.trim())) {
     throw new Error(`metadataFallbackProvider must be a non-empty string or null in config file: ${path}`);
+  }
+  if (record.contextWindowCap !== undefined && record.contextWindowCap !== null
+    && (typeof record.contextWindowCap !== "number" || !Number.isSafeInteger(record.contextWindowCap) || record.contextWindowCap <= 0)) {
+    throw new Error(`contextWindowCap must be a positive integer or null in config file: ${path}`);
   }
   if (record.modelAliases !== undefined && !isStringMap(record.modelAliases)) {
     throw new Error(`modelAliases must be an object with string values in config file: ${path}`);

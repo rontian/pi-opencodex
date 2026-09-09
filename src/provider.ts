@@ -356,6 +356,11 @@ function cost(metadata: ModelsDevMetadata): PiProviderModel["cost"] {
   };
 }
 
+function applyContextWindowCap(model: PiProviderModel, cap: number | null): PiProviderModel {
+  if (cap === null || model.contextWindow <= cap) return model;
+  return { ...model, contextWindow: cap };
+}
+
 function applyOverride(model: PiProviderModel, override?: ModelOverride): PiProviderModel {
   return override
     ? {
@@ -395,7 +400,7 @@ function emptyMethods(): Record<MetadataMatchMethod, number> {
 export function buildProviderModels(
   available: OpenCodexModel[],
   metadata: ModelsDevCatalog,
-  config: Pick<OpenCodexProviderConfig, "modelAliases" | "modelOverrides" | "metadataFallbackProvider">,
+  config: Pick<OpenCodexProviderConfig, "modelAliases" | "modelOverrides" | "metadataFallbackProvider" | "contextWindowCap">,
 ): CatalogSnapshot["built"] {
   const matchMethods = emptyMethods();
   const unmatchedModelIds: string[] = [];
@@ -409,7 +414,7 @@ export function buildProviderModels(
       matchMethods[match.method] += 1;
     }
     return applyOverride(
-      makeModel(model, match?.metadata),
+      applyContextWindowCap(makeModel(model, match?.metadata), config.contextWindowCap),
       config.modelOverrides[model.id] ?? config.modelOverrides[model.metadataId],
     );
   });

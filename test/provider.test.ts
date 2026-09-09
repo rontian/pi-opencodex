@@ -47,7 +47,7 @@ test("OpenCodex discovery preserves routed id and exposes stripped metadata id",
   ]);
 });
 
-test("metadata fallback matches the stripped routed id without changing inference id", () => {
+test("metadata fallback caps the Pi working context without changing inference id", () => {
   const [model] = parseOpenCodexModelsResponse({ data: [{ id: "rontian/glm-5.3-flash", owned_by: "rontian" }] }, "rontian/");
   const match = findMetadataMatch(model, catalog, {}, "openrouter");
   assert.ok(match);
@@ -57,12 +57,48 @@ test("metadata fallback matches the stripped routed id without changing inferenc
     modelAliases: {},
     modelOverrides: {},
     metadataFallbackProvider: "openrouter",
+    contextWindowCap: 272_000,
   });
   assert.equal(built.models[0].id, "rontian/glm-5.3-flash");
-  assert.equal(built.models[0].contextWindow, 1_000_000);
+  assert.equal(built.models[0].contextWindow, 272_000);
   assert.equal(built.models[0].maxTokens, 131_072);
   assert.equal(built.models[0].reasoning, true);
   assert.deepEqual(built.models[0].input, ["text", "image"]);
+});
+
+test("working context cap never increases a smaller model context", () => {
+  const [model] = parseOpenCodexModelsResponse({ data: [{ id: "small-model" }] }, "rontian/");
+  const built = buildProviderModels([model], {}, {
+    modelAliases: {},
+    modelOverrides: {},
+    metadataFallbackProvider: null,
+    contextWindowCap: 272_000,
+  });
+  assert.equal(built.models[0].contextWindow, 128_000);
+});
+
+test("null context cap preserves the physical model context", () => {
+  const [model] = parseOpenCodexModelsResponse({ data: [{ id: "rontian/glm-5.3-flash" }] }, "rontian/");
+  const built = buildProviderModels([model], catalog, {
+    modelAliases: {},
+    modelOverrides: {},
+    metadataFallbackProvider: "openrouter",
+    contextWindowCap: null,
+  });
+  assert.equal(built.models[0].contextWindow, 1_000_000);
+});
+
+test("per-model contextWindow override is applied after the global cap", () => {
+  const [model] = parseOpenCodexModelsResponse({ data: [{ id: "rontian/glm-5.3-flash" }] }, "rontian/");
+  const built = buildProviderModels([model], catalog, {
+    modelAliases: {},
+    modelOverrides: {
+      "rontian/glm-5.3-flash": { contextWindow: 512_000 },
+    },
+    metadataFallbackProvider: "openrouter",
+    contextWindowCap: 272_000,
+  });
+  assert.equal(built.models[0].contextWindow, 512_000);
 });
 
 test("explicit alias wins over fallback matching", () => {
