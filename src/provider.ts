@@ -37,7 +37,14 @@ export interface ModelsDevMetadata {
 }
 
 export type ModelsDevCatalog = Record<string, ModelsDevMetadata>;
-export type MetadataMatchMethod = "alias" | "exact" | "owner-prefix" | "suffix" | "normalized-suffix" | "provider-fallback";
+export type MetadataMatchMethod =
+  | "alias"
+  | "exact"
+  | "owner-prefix"
+  | "suffix"
+  | "suffix-min"
+  | "normalized-suffix"
+  | "normalized-suffix-min";
 
 export interface PiProviderModel {
   id: string;
@@ -281,6 +288,42 @@ function unique(values: string[]): string | undefined {
   return set.length === 1 ? set[0] : undefined;
 }
 
+function minimumPositive(values: Array<number | undefined>): number | undefined {
+  const candidates = values.filter((value): value is number =>
+    typeof value === "number" && Number.isFinite(value) && value > 0);
+  return candidates.length ? Math.min(...candidates) : undefined;
+}
+
+function aggregateMetadata(
+  keys: string[],
+  catalog: ModelsDevCatalog,
+  preferredProvider: string | null,
+): ModelsDevMetadata {
+  const ordered = [...new Set(keys)].sort((a, b) => a.localeCompare(b));
+  const preferred = preferredProvider
+    ? ordered.find((key) => {
+        const source = catalog[key].sourceProvider ?? key.split("/")[0];
+        return source.toLowerCase() === preferredProvider.toLowerCase();
+      })
+    : undefined;
+  const base = catalog[preferred ?? ordered[0]];
+  const context = minimumPositive(ordered.map((key) => catalog[key].limit?.context));
+  const output = minimumPositive(ordered.map((key) => catalog[key].limit?.output));
+
+  return {
+    ...base,
+    ...(context !== undefined || output !== undefined
+      ? {
+          limit: {
+            ...(base.limit ?? {}),
+            ...(context !== undefined ? { context } : {}),
+            ...(output !== undefined ? { output } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 export function findMetadataMatch(
   model: OpenCodexModel,
   catalog: ModelsDevCatalog,
@@ -304,19 +347,24 @@ export function findMetadataMatch(
   }
 
   const keys = Object.keys(catalog);
-  const suffix = unique(keys.filter((key) => modelName(key, catalog[key]) === lookup));
+  const suffixMatches = keys.filter((key) => modelName(key, catalog[key]) === lookup);
+  const suffix = unique(suffixMatches);
   if (suffix) return { metadata: catalog[suffix], method: "suffix" };
+  if (suffixMatches.length > 1) {
+    return {
+      metadata: aggregateMetadata(suffixMatches, catalog, fallbackProvider),
+      method: "suffix-min",
+    };
+  }
 
   const normalizedMatches = keys.filter((key) => normalized(modelName(key, catalog[key])) === normalized(lookup));
   const normalizedKey = unique(normalizedMatches);
   if (normalizedKey) return { metadata: catalog[normalizedKey], method: "normalized-suffix" };
-
-  if (fallbackProvider) {
-    const fallback = unique(normalizedMatches.filter((key) => {
-      const source = catalog[key].sourceProvider ?? key.split("/")[0];
-      return source.toLowerCase() === fallbackProvider.toLowerCase();
-    }));
-    if (fallback) return { metadata: catalog[fallback], method: "provider-fallback" };
+  if (normalizedMatches.length > 1) {
+    return {
+      metadata: aggregateMetadata(normalizedMatches, catalog, fallbackProvider),
+      method: "normalized-suffix-min",
+    };
   }
   return undefined;
 }
@@ -392,8 +440,9 @@ function emptyMethods(): Record<MetadataMatchMethod, number> {
     exact: 0,
     "owner-prefix": 0,
     suffix: 0,
+    "suffix-min": 0,
     "normalized-suffix": 0,
-    "provider-fallback": 0,
+    "normalized-suffix-min": 0,
   };
 }
 

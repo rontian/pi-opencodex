@@ -174,18 +174,26 @@ Startup/background refresh and Pi's provider `refreshModels` hook intentionally 
 
 ## Metadata matching
 
-The package follows the matching approach from `0xRichardH/pi-cliproxyapi-provider`:
+The package first tries precise matches and then falls back to matching by the stripped model name:
 
 ```text
 explicit alias
 -> exact id
 -> owner prefix
--> suffix
--> normalized suffix
--> configured fallback provider (default: openrouter)
+-> exact suffix name
+-> normalized suffix name
 ```
 
-An alias only affects metadata lookup. It never changes the model ID sent to OpenCodex.
+When more than one models.dev provider exposes the same model name, `pi-opencodex` keeps all of those matches instead of choosing a single provider for limits. It registers the most conservative limits across the matching rows:
+
+```text
+contextWindow = minimum positive reported context limit
+maxTokens     = minimum positive reported output limit
+```
+
+This avoids a routed model inheriting a provider-specific oversized limit that the actual upstream rejects. `metadataFallbackProvider` remains a compatibility preference for selecting the representative row used for non-limit metadata such as name, reasoning, modalities, and cost; it does not decide context/output limits when multiple same-name rows exist.
+
+An alias only affects metadata lookup. It never changes the model ID sent to OpenCodex, and an explicit alias still selects that one metadata row without aggregation.
 
 Example:
 

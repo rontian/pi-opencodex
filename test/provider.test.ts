@@ -23,7 +23,7 @@ const catalog: ModelsDevCatalog = {
     name: "GLM 5.3 Flash via OpenRouter",
     reasoning: true,
     modalities: { input: ["text", "image"] },
-    limit: { context: 1_000_000, output: 131_072 },
+    limit: { context: 1_310_720, output: 943_718 },
   },
 };
 
@@ -47,11 +47,13 @@ test("OpenCodex discovery preserves routed id and exposes stripped metadata id",
   ]);
 });
 
-test("metadata fallback caps the Pi working context without changing inference id", () => {
+test("same-name metadata uses the minimum context and output limits across providers", () => {
   const [model] = parseOpenCodexModelsResponse({ data: [{ id: "rontian/glm-5.3-flash", owned_by: "rontian" }] }, "rontian/");
   const match = findMetadataMatch(model, catalog, {}, "openrouter");
   assert.ok(match);
-  assert.equal(match.method, "provider-fallback");
+  assert.equal(match.method, "suffix-min");
+  assert.equal(match.metadata.sourceProvider, "openrouter");
+  assert.deepEqual(match.metadata.limit, { context: 1_000_000, output: 131_072 });
 
   const built = buildProviderModels([model], catalog, {
     modelAliases: {},
@@ -64,6 +66,14 @@ test("metadata fallback caps the Pi working context without changing inference i
   assert.equal(built.models[0].maxTokens, 131_072);
   assert.equal(built.models[0].reasoning, true);
   assert.deepEqual(built.models[0].input, ["text", "image"]);
+});
+
+test("same-name limit aggregation does not require a fallback provider", () => {
+  const [model] = parseOpenCodexModelsResponse({ data: [{ id: "rontian/glm-5.3-flash" }] }, "rontian/");
+  const match = findMetadataMatch(model, catalog, {}, null);
+  assert.ok(match);
+  assert.equal(match.method, "suffix-min");
+  assert.deepEqual(match.metadata.limit, { context: 1_000_000, output: 131_072 });
 });
 
 test("working context cap never increases a smaller model context", () => {
@@ -101,7 +111,7 @@ test("per-model contextWindow override is applied after the global cap", () => {
   assert.equal(built.models[0].contextWindow, 512_000);
 });
 
-test("explicit alias wins over fallback matching", () => {
+test("explicit alias wins over same-name aggregation", () => {
   const [model] = parseOpenCodexModelsResponse({ data: [{ id: "rontian/glm-5.3-flash" }] }, "rontian/");
   const match = findMetadataMatch(model, catalog, {
     "rontian/glm-5.3-flash": "zhipuai/glm-5.3-flash",
