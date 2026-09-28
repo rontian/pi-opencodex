@@ -1,19 +1,4 @@
-import { BorderedLoader } from "@earendil-works/pi-coding-agent";
-
-export interface BusyCommandContext {
-  hasUI: boolean;
-  mode?: string;
-  ui: {
-    custom?: <T>(
-      factory: (
-        tui: unknown,
-        theme: unknown,
-        keybindings: unknown,
-        done: (result: T) => void,
-      ) => unknown,
-    ) => Promise<T>;
-  };
-}
+import { BorderedLoader, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 /**
  * Run a short user-triggered command while the TUI editor is temporarily
@@ -23,7 +8,7 @@ export interface BusyCommandContext {
  * loader gets a chance to mount and render before slow IO begins.
  */
 export async function withBusyCommand<T>(
-  ctx: BusyCommandContext,
+  ctx: ExtensionCommandContext,
   message: string,
   operation: () => Promise<T>,
 ): Promise<T> {
