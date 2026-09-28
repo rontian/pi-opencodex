@@ -170,6 +170,8 @@ The three refresh forms have intentionally different scopes:
 
 For model or full refresh, the package first runs `ocx sync`, waits for OpenCodex readiness, then reloads `/v1/models` and republishes the dynamic Pi provider. Metadata-only refresh updates the models.dev catalog without touching OpenCodex provider discovery.
 
+In interactive TUI mode, user-triggered `/opencodex status`, `start`, and `refresh` operations temporarily replace the editor with a non-cancellable busy loader. This keeps the input area visibly occupied while OpenCodex/GitHub-style preflight or network work is in progress and prevents accidental input during the few-second command window. Startup/background refresh remains non-blocking and never steals editor focus.
+
 Startup/background refresh and Pi's provider `refreshModels` hook intentionally do **not** run `ocx sync`. Ordinary Pi startup always registers the provider from local cache/bundled data first, then may refresh the current local OpenCodex `/v1/models` catalog. `models.dev` is not fetched on every Pi startup: metadata refresh is freshness-gated to at most one background attempt per 24 hours across Pi processes. Background refresh failures are silent because the already-registered cache/bundled snapshot remains usable. Use an explicit `/opencodex refresh` or `/opencodex refresh metadata` when you want an immediate metadata refresh with visible success/failure details.
 
 ## Metadata matching

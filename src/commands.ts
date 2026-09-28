@@ -16,6 +16,7 @@ import type {
   SourceRefreshResult,
 } from "./provider.ts";
 import { ocxReady, ocxStart, ocxStatus, ocxSync, waitForOcxReady } from "./ocx-cli.ts";
+import { withBusyCommand } from "./busy-command.ts";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -218,30 +219,49 @@ export function registerOpenCodexCommand(pi: ExtensionAPI, runtime?: ProviderRun
 
       const config = loadConfig(ctx.cwd);
       if (subcommand === "status") {
-        const [ready, status] = await Promise.all([ocxReady(), ocxStatus()]);
-        const snapshot = catalog.current() ?? await catalog.load();
+        const outcome = await withBusyCommand(
+          ctx,
+          "OpenCodex: checking status...",
+          async () => {
+            const [ready, status] = await Promise.all([ocxReady(), ocxStatus()]);
+            const snapshot = catalog.current() ?? await catalog.load();
+            return { ready, status, snapshot };
+          },
+        );
         ctx.ui.notify([
-          summarizeOcx("ocx ready", ready),
-          summarizeOcx("ocx status", status),
+          summarizeOcx("ocx ready", outcome.ready),
+          summarizeOcx("ocx status", outcome.status),
           "",
-          statusText(config, snapshot),
-        ].join("\n"), ready.ok ? "info" : "warning");
+          statusText(config, outcome.snapshot),
+        ].join("\n"), outcome.ready.ok ? "info" : "warning");
         return;
       }
 
       if (subcommand === "start") {
-        const started = await ocxStart();
-        if (!started.ok) {
-          ctx.ui.notify(`Failed to start OpenCodex: ${started.error ?? started.stderr}`, "error");
+        const outcome = await withBusyCommand(
+          ctx,
+          "OpenCodex: starting and refreshing...",
+          async () => {
+            const started = await ocxStart();
+            if (!started.ok) return { kind: "start-failed" as const, started };
+            const ready = await waitForOcxReady();
+            if (!ready.ok) return { kind: "readiness-failed" as const, ready };
+            const result = await runtime.refresh("all", "manual");
+            return { kind: "ok" as const, result };
+          },
+        );
+        if (outcome.kind === "start-failed") {
+          ctx.ui.notify(`Failed to start OpenCodex: ${outcome.started.error ?? outcome.started.stderr}`, "error");
           return;
         }
-        const ready = await waitForOcxReady();
-        if (!ready.ok) {
-          ctx.ui.notify(`OpenCodex start returned successfully but readiness failed: ${ready.error ?? ready.stderr}`, "warning");
+        if (outcome.kind === "readiness-failed") {
+          ctx.ui.notify(
+            `OpenCodex start returned successfully but readiness failed: ${outcome.ready.error ?? outcome.ready.stderr}`,
+            "warning",
+          );
           return;
         }
-        const result = await runtime.refresh("all", "manual");
-        await notifyRefresh(ctx, result, "handled by ocx start");
+        await notifyRefresh(ctx, outcome.result, "handled by ocx start");
         return;
       }
 
@@ -252,13 +272,22 @@ export function registerOpenCodexCommand(pi: ExtensionAPI, runtime?: ProviderRun
           return;
         }
 
-        if (refreshRequiresOcxSync(target)) {
-          if (!(await requireReady(ctx))) return;
-          if (!(await syncOpenCodexCatalog(ctx))) return;
-        }
+        const message = target === "metadata"
+          ? "OpenCodex: refreshing models.dev metadata..."
+          : target === "models"
+            ? "OpenCodex: syncing and refreshing models..."
+            : "OpenCodex: syncing models and metadata...";
+        const completed = await withBusyCommand(ctx, message, async () => {
+          if (refreshRequiresOcxSync(target)) {
+            if (!(await requireReady(ctx))) return false;
+            if (!(await syncOpenCodexCatalog(ctx))) return false;
+          }
 
-        const result = await runtime.refresh(target, "manual");
-        await notifyRefresh(ctx, result, refreshRequiresOcxSync(target) ? "completed" : "not requested");
+          const result = await runtime.refresh(target, "manual");
+          await notifyRefresh(ctx, result, refreshRequiresOcxSync(target) ? "completed" : "not requested");
+          return true;
+        });
+        if (!completed) return;
         return;
       }
 
