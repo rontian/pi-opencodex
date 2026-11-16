@@ -124,7 +124,7 @@ test("explicit alias wins over same-name aggregation", () => {
 
 
 test("MCM versioned snapshot drives Pi window without rewriting OpenCodex route IDs", () => {
-  const [model] = parseOpenCodexModelsResponse({
+  const available = parseOpenCodexModelsResponse({
     data: [{ id: "rontian/glm-5.3-flash" }, { id: "not-in-mcm" }],
   }, "rontian/");
   const selected = parseMCMSnapshot({ schemaVersion: 1, generatedAt: new Date().toISOString(), models: [{
@@ -136,13 +136,17 @@ test("MCM versioned snapshot drives Pi window without rewriting OpenCodex route 
     reasoning: true,
     input: ["text", "image"],
   }]});
-  const built = buildProviderModels([model], {}, {
+  const built = buildProviderModels(available, {}, {
     modelAliases: {}, modelOverrides: {}, metadataFallbackProvider: null,
     contextWindowCap: 272000,
   }, selected);
-  assert.equal(built.models[0].id, "rontian/glm-5.3-flash");
-  assert.equal(built.models[0].contextWindow, 272000);
-  assert.equal(built.models[0].maxTokens, 131072);
+  const managed = built.models.find((model) => model.id === "rontian/glm-5.3-flash");
+  const unmatched = built.models.find((model) => model.id === "not-in-mcm");
+  assert.ok(managed);
+  assert.ok(unmatched);
+  assert.equal(managed.contextWindow, 272000);
+  assert.equal(managed.maxTokens, 131072);
+  assert.equal(unmatched.contextWindow, 128000);
   assert.equal(built.stats.matchMethods.mcm, 1);
   assert.throws(() => parseMCMSnapshot({ schemaVersion: 2, models: [] }));
   assert.throws(() => parseMCMSnapshot({ schemaVersion: 1, generatedAt: "2020-01-01T00:00:00Z", models: [] }));
