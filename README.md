@@ -284,3 +284,18 @@ pi -ne -e /absolute/path/to/pi-opencodex --list-models opencodex
 For protocol/tool-call compatibility, also run a real prompt that requires one harmless Pi tool call, for example asking the model to run `pwd` and report the directory. That exercises the Pi -> pi-opencodex -> OpenCodex -> upstream round trip beyond a text-only completion.
 
 After editing the local package, restart the smoke-test Pi process for the most deterministic reload behavior.
+
+
+## Optional MCM local metadata (schema v1)
+
+After upgrading `pi-opencodex`, add `"mcmCatalogSchemaVersion": 1` to the
+global `~/.pi/agent/pi-opencodex/config.json` to attest this consumer version.
+Then `mcm clients pi plan` and (after review) `mcm clients pi apply --yes`
+can set `"mcmCatalogPath": "/absolute/path/to/catalog.json"`.
+The plugin reads the versioned snapshot on startup/refresh, only overlays
+models actually discovered from OpenCodex, and falls back to its existing
+models.dev/cache data if the file is missing or invalid. It does not require
+`mcm serve` or modify the inference route. An explicit per-model override
+in the Pi config still wins; review those separately.
+
+The plugin rejects MCM snapshots older than seven days (or with invalid/future timestamps) and uses its previous metadata fallback path instead. This is local contract validation, not a proof of a successful Pi runtime session.

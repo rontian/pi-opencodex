@@ -15,6 +15,8 @@ export interface OpenCodexProviderConfig {
   modelsDevEnabled: boolean;
   metadataFallbackProvider: string | null;
   contextWindowCap: number | null;
+  mcmCatalogSchemaVersion: 1;
+  mcmCatalogPath: string | null;
   modelAliases: Record<string, string>;
   modelOverrides: Record<string, ModelOverride>;
 }
@@ -30,6 +32,8 @@ export const DEFAULT_CONFIG: OpenCodexProviderConfig = {
   modelsDevEnabled: true,
   metadataFallbackProvider: "openrouter",
   contextWindowCap: DEFAULT_CONTEXT_WINDOW_CAP,
+  mcmCatalogSchemaVersion: 1,
+  mcmCatalogPath: null,
   modelAliases: {},
   modelOverrides: {},
 };
@@ -72,7 +76,7 @@ function validateLayer(value: unknown, path: string, project = false): ConfigLay
   const record = value as Record<string, unknown>;
   const allowed = project
     ? new Set(["metadataFallbackProvider", "modelAliases", "modelOverrides"])
-    : new Set(["providerName", "baseUrl", "modelPrefix", "modelsDevEnabled", "metadataFallbackProvider", "contextWindowCap", "modelAliases", "modelOverrides"]);
+    : new Set(["providerName", "baseUrl", "modelPrefix", "modelsDevEnabled", "metadataFallbackProvider", "contextWindowCap", "mcmCatalogSchemaVersion", "mcmCatalogPath", "modelAliases", "modelOverrides"]);
   const unknown = Object.keys(record).filter((key) => !allowed.has(key));
   if (unknown.length > 0) throw new Error(`Unsupported config fields in ${path}: ${unknown.join(", ")}`);
 
@@ -91,6 +95,13 @@ function validateLayer(value: unknown, path: string, project = false): ConfigLay
   if (record.contextWindowCap !== undefined && record.contextWindowCap !== null
     && (typeof record.contextWindowCap !== "number" || !Number.isSafeInteger(record.contextWindowCap) || record.contextWindowCap <= 0)) {
     throw new Error(`contextWindowCap must be a positive integer or null in config file: ${path}`);
+  }
+  if (record.mcmCatalogSchemaVersion !== undefined && record.mcmCatalogSchemaVersion !== 1) {
+    throw new Error(`mcmCatalogSchemaVersion must be 1 in config file: ${path}`);
+  }
+  if (record.mcmCatalogPath !== undefined && record.mcmCatalogPath !== null &&
+      (typeof record.mcmCatalogPath !== "string" || !record.mcmCatalogPath.startsWith("/"))) {
+    throw new Error(`mcmCatalogPath must be an absolute path or null in config file: ${path}`);
   }
   if (record.modelAliases !== undefined && !isStringMap(record.modelAliases)) {
     throw new Error(`modelAliases must be an object with string values in config file: ${path}`);

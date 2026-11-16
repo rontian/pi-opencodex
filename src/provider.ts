@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { cacheDir, type ModelOverride, type OpenCodexProviderConfig } from "./config.ts";
 
@@ -37,6 +37,51 @@ export interface ModelsDevMetadata {
 }
 
 export type ModelsDevCatalog = Record<string, ModelsDevMetadata>;
+
+export interface MCMModel {
+  routeModelId: string;
+  matchStatus: "resolved" | "ambiguous" | "unknown";
+  piWindow: number;
+  fallback: boolean;
+  outputLimit?: number;
+  reasoning?: boolean | null;
+  input?: string[];
+}
+
+// A local, validated fact snapshot, never an availability source.
+// MCM must not add models that OpenCodex did not advertise.
+export function parseMCMSnapshot(payload: unknown): Map<string, MCMModel> {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("MCM catalog must be an object");
+  }
+  const root = payload as Record<string, unknown>;
+  if (root.schemaVersion !== 1 || !Array.isArray(root.models)) {
+    throw new Error("unsupported MCM catalog schema");
+  }
+  const generatedAt = typeof root.generatedAt === "string" ? Date.parse(root.generatedAt) : NaN;
+  const age = Date.now() - generatedAt;
+  if (!Number.isFinite(generatedAt) || age < -5 * 60_000 || age > 7 * 86_400_000) {
+    throw new Error("MCM catalog is missing its timestamp, stale, or from the future");
+  }
+  const rows = new Map<string, MCMModel>();
+  for (const raw of root.models) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid MCM model");
+    const value = raw as Record<string, unknown>;
+    const id = value.routeModelId;
+    const window = value.piWindow;
+    if (typeof id !== "string" || !id || rows.has(id) ||
+      typeof window !== "number" || !Number.isSafeInteger(window) || window <= 0 ||
+      !["resolved","ambiguous","unknown"].includes(String(value.matchStatus)) ||
+      typeof value.fallback !== "boolean" ||
+      (value.outputLimit !== undefined && (!Number.isSafeInteger(value.outputLimit) || (value.outputLimit as number) < 0)) ||
+      (value.reasoning !== undefined && value.reasoning !== null && typeof value.reasoning !== "boolean") ||
+      (value.input !== undefined && (!Array.isArray(value.input) || !value.input.every((x: unknown) => typeof x === "string")))) {
+      throw new Error("invalid or duplicate MCM model record");
+    }
+    rows.set(id, raw as unknown as MCMModel);
+  }
+  return rows;
+}
 export type MetadataMatchMethod =
   | "alias"
   | "exact"
@@ -44,7 +89,8 @@ export type MetadataMatchMethod =
   | "suffix"
   | "suffix-min"
   | "normalized-suffix"
-  | "normalized-suffix-min";
+  | "normalized-suffix-min"
+  | "mcm";
 
 export interface PiProviderModel {
   id: string;
@@ -443,6 +489,7 @@ function emptyMethods(): Record<MetadataMatchMethod, number> {
     "suffix-min": 0,
     "normalized-suffix": 0,
     "normalized-suffix-min": 0,
+    mcm: 0,
   };
 }
 
@@ -450,12 +497,29 @@ export function buildProviderModels(
   available: OpenCodexModel[],
   metadata: ModelsDevCatalog,
   config: Pick<OpenCodexProviderConfig, "modelAliases" | "modelOverrides" | "metadataFallbackProvider" | "contextWindowCap">,
+  mcmModels?: Map<string, MCMModel>,
 ): CatalogSnapshot["built"] {
   const matchMethods = emptyMethods();
   const unmatchedModelIds: string[] = [];
   let enriched = 0;
 
   const models = available.map((model) => {
+    const managed = mcmModels?.get(model.id);
+    if (managed) {
+      // Do not run a separate name-based metadata matcher for MCM-owned facts.
+      enriched += 1;
+      matchMethods.mcm += 1;
+      const base = makeModel(model);
+      const contextWindow = managed.piWindow;
+      const output = managed.outputLimit && managed.outputLimit > 0 ? managed.outputLimit : DEFAULT_MAX_TOKENS;
+      return applyOverride(applyContextWindowCap({
+        ...base,
+        contextWindow,
+        maxTokens: Math.min(output, contextWindow),
+        ...(typeof managed.reasoning === "boolean" ? { reasoning: managed.reasoning } : {}),
+        ...(managed.input?.includes("image") ? { input: ["text", "image"] as InputModality[] } : {}),
+      }, config.contextWindowCap), config.modelOverrides[model.id] ?? config.modelOverrides[model.metadataId]);
+    }
     const match = findMetadataMatch(model, metadata, config.modelAliases, config.metadataFallbackProvider);
     if (!match) unmatchedModelIds.push(model.id);
     else {
@@ -496,6 +560,7 @@ export class ProviderCatalog {
   private snapshot?: CatalogSnapshot;
   private readonly config: OpenCodexProviderConfig;
   private readonly options: ProviderCatalogOptions;
+  private mcmModels?: Map<string, MCMModel>;
 
   constructor(config: OpenCodexProviderConfig, options: ProviderCatalogOptions = {}) {
     this.config = config;
@@ -507,6 +572,7 @@ export class ProviderCatalog {
   }
 
   async load(): Promise<CatalogSnapshot> {
+    await this.loadMCM();
     const models = await readCache(
       modelCachePath(this.config),
       (value) => parseModelCache(value, this.config.modelPrefix),
@@ -546,6 +612,7 @@ export class ProviderCatalog {
     signal?: AbortSignal,
   ): Promise<CatalogRefreshResult> {
     const current = this.snapshot ?? await this.load();
+    await this.loadMCM();
     let available = current.availableModels;
     let modelsUpdatedAt = current.modelsUpdatedAt;
     let metadata = current.metadata;
@@ -607,6 +674,18 @@ export class ProviderCatalog {
     };
   }
 
+  private async loadMCM(): Promise<void> {
+    this.mcmModels = undefined;
+    const path = this.config.mcmCatalogPath;
+    if (!path || !isAbsolute(path)) return;
+    try {
+      this.mcmModels = parseMCMSnapshot(JSON.parse(await readFile(path, "utf8")));
+    } catch {
+      // Preserve existing bundled/cached models.dev fallback when MCM is absent,
+      // invalid or temporarily unavailable; Pi never needs a running MCM server.
+    }
+  }
+
   private set(
     availableModels: OpenCodexModel[],
     modelsUpdatedAt: number | undefined,
@@ -620,7 +699,7 @@ export class ProviderCatalog {
       metadata,
       metadataUpdatedAt,
       metadataSource,
-      built: buildProviderModels(availableModels, metadata, this.config),
+      built: buildProviderModels(availableModels, metadata, this.config, this.mcmModels),
     };
   }
 }
