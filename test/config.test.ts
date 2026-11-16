@@ -30,3 +30,15 @@ test("project config cannot replace connection identity or the global context ca
   assert.equal(config.contextWindowCap, 272_000);
   assert.equal(config.modelAliases.foo, "openai/foo");
 });
+
+test("MCM metadata path is global-only, and defaults to optional disabled", () => {
+  const defaults = mergeConfigLayers(undefined, undefined, {});
+  assert.equal(defaults.mcmCatalogPath, null);
+  assert.equal(defaults.mcmCatalogSchemaVersion, 1);
+  const config = mergeConfigLayers(
+    { mcmCatalogPath: "/Users/example/.local/share/mcm/catalog.json" },
+    { mcmCatalogPath: "/tmp/untrusted-other.json" },
+    {},
+  );
+  assert.equal(config.mcmCatalogPath, "/Users/example/.local/share/mcm/catalog.json");
+});
