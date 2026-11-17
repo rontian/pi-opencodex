@@ -103,6 +103,7 @@ export interface CatalogRefreshResult {
 
 export interface ProviderCatalogOptions {
   bundledModelsDevPath?: string;
+  metadataCachePath?: string;
 }
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
@@ -518,7 +519,7 @@ export class ProviderCatalog {
       return this.set(models?.data ?? [], models?.fetchedAt, {}, undefined, "disabled");
     }
 
-    const cachedMetadata = await readCache(metadataCachePath(), parseModelsDevCatalog);
+    const cachedMetadata = await readCache(this.options.metadataCachePath ?? metadataCachePath(), parseModelsDevCatalog);
     if (cachedMetadata) {
       return this.set(
         models?.data ?? [],
@@ -593,7 +594,7 @@ export class ProviderCatalog {
         );
         meta.changed = stable(fresh) !== stable(current.metadata);
         metadataUpdatedAt = Date.now();
-        await writeCache(metadataCachePath(), fresh, metadataUpdatedAt);
+        await writeCache(this.options.metadataCachePath ?? metadataCachePath(), fresh, metadataUpdatedAt);
         metadata = fresh;
         metadataSource = "cache";
         meta.updated = true;
