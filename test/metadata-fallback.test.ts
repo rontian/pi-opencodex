@@ -47,7 +47,7 @@ test("ProviderCatalog loads bundled metadata when no valid metadata cache exists
         providerName: `opencodex-test-${Date.now()}`,
         baseUrl: "http://127.0.0.1:65534/v1",
       },
-      { bundledModelsDevPath: snapshotPath },
+      { bundledModelsDevPath: snapshotPath, metadataCachePath: join(dir, "metadata-cache.json") },
     );
     const loaded = await catalog.load();
     assert.equal(loaded.metadataSource, "bundled");
