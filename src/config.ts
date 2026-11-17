@@ -6,6 +6,7 @@ export interface ModelOverride {
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
+  compat?: { supportsDeveloperRole?: boolean };
 }
 
 export interface OpenCodexProviderConfig {
@@ -56,11 +57,17 @@ function isModelOverrides(value: unknown): value is Record<string, ModelOverride
   return Object.entries(value).every(([key, raw]) => {
     if (!key.trim() || !raw || typeof raw !== "object" || Array.isArray(raw)) return false;
     const record = raw as Record<string, unknown>;
-    const allowed = new Set(["reasoning", "contextWindow", "maxTokens"]);
+    const allowed = new Set(["reasoning", "contextWindow", "maxTokens", "compat"]);
     if (Object.keys(record).some((field) => !allowed.has(field))) return false;
     if (record.reasoning !== undefined && typeof record.reasoning !== "boolean") return false;
     if (record.contextWindow !== undefined && (typeof record.contextWindow !== "number" || record.contextWindow <= 0)) return false;
     if (record.maxTokens !== undefined && (typeof record.maxTokens !== "number" || record.maxTokens <= 0)) return false;
+    if (record.compat !== undefined) {
+      if (!record.compat || typeof record.compat !== "object" || Array.isArray(record.compat)) return false;
+      const compat = record.compat as Record<string, unknown>;
+      if (Object.keys(compat).some((field) => field !== "supportsDeveloperRole")) return false;
+      if (compat.supportsDeveloperRole !== undefined && typeof compat.supportsDeveloperRole !== "boolean") return false;
+    }
     return true;
   });
 }
