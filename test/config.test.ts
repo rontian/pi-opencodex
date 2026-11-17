@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { mergeConfigLayers } from "../src/config.ts";
+import { mergeConfigLayers, readConfigFile } from "../src/config.ts";
 
 test("default route prefix is rontian/ and can be configured globally", () => {
   assert.equal(mergeConfigLayers().modelPrefix, "rontian/");
@@ -29,4 +32,27 @@ test("project config cannot replace connection identity or the global context ca
   assert.equal(config.baseUrl, "http://127.0.0.1:10100/v1");
   assert.equal(config.contextWindowCap, 272_000);
   assert.equal(config.modelAliases.foo, "openai/foo");
+});
+
+
+test("model compat override accepts only supportsDeveloperRole boolean", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-opencodex-config-"));
+  const file = join(dir, "config.json");
+  const writeOverride = (compat: unknown) => writeFileSync(file, JSON.stringify({
+    modelOverrides: { "rontian/glm-5.3-flash": { compat } },
+  }));
+  try {
+    writeOverride({ supportsDeveloperRole: false });
+    assert.deepEqual(readConfigFile(file)?.modelOverrides["rontian/glm-5.3-flash"].compat, {
+      supportsDeveloperRole: false,
+    });
+    writeOverride({ supportsDeveloperRole: true });
+    assert.equal(readConfigFile(file)?.modelOverrides["rontian/glm-5.3-flash"].compat?.supportsDeveloperRole, true);
+    for (const invalid of [null, [], { supportsDeveloperRole: "false" }, { unknown: true }]) {
+      writeOverride(invalid);
+      assert.throws(() => readConfigFile(file), /modelOverrides contains invalid entries/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
