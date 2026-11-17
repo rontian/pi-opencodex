@@ -120,3 +120,22 @@ test("explicit alias wins over same-name aggregation", () => {
   assert.equal(match.method, "alias");
   assert.equal(match.metadata.sourceProvider, "zhipuai");
 });
+
+
+test("per-model compat override is isolated to the selected model", () => {
+  const models = parseOpenCodexModelsResponse({ data: [
+    { id: "rontian/glm-5.3-flash" },
+    { id: "rontian/deepseek-flash" },
+  ] }, "rontian/");
+  const built = buildProviderModels(models, catalog, {
+    modelAliases: {},
+    modelOverrides: {
+      "rontian/glm-5.3-flash": { compat: { supportsDeveloperRole: false } },
+    },
+    metadataFallbackProvider: "openrouter",
+    contextWindowCap: 272_000,
+  });
+  assert.deepEqual(built.models.find((model) => model.id === "rontian/glm-5.3-flash")?.compat,
+    { supportsDeveloperRole: false });
+  assert.equal(built.models.find((model) => model.id === "rontian/deepseek-flash")?.compat, undefined);
+});
