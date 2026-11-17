@@ -43,11 +43,15 @@ test("model compat override accepts only supportsDeveloperRole boolean", () => {
   }));
   try {
     writeOverride({ supportsDeveloperRole: false });
-    assert.deepEqual(readConfigFile(file)?.modelOverrides["rontian/glm-5.3-flash"].compat, {
+    const disabled = readConfigFile(file);
+    assert.ok(disabled);
+    assert.deepEqual(disabled.modelOverrides?.["rontian/glm-5.3-flash"]?.compat, {
       supportsDeveloperRole: false,
     });
     writeOverride({ supportsDeveloperRole: true });
-    assert.equal(readConfigFile(file)?.modelOverrides["rontian/glm-5.3-flash"].compat?.supportsDeveloperRole, true);
+    const enabled = readConfigFile(file);
+    assert.ok(enabled);
+    assert.equal(enabled.modelOverrides?.["rontian/glm-5.3-flash"]?.compat?.supportsDeveloperRole, true);
     for (const invalid of [null, [], { supportsDeveloperRole: "false" }, { unknown: true }]) {
       writeOverride(invalid);
       assert.throws(() => readConfigFile(file), /modelOverrides contains invalid entries/);
