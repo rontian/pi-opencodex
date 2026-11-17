@@ -67,6 +67,7 @@ export interface PiProviderModel {
   contextWindow: number;
   maxTokens: number;
   thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra", string | null>>;
+  compat?: { supportsDeveloperRole?: boolean };
 }
 
 export interface CatalogSnapshot {
@@ -416,6 +417,7 @@ function applyOverride(model: PiProviderModel, override?: ModelOverride): PiProv
         ...(override.reasoning !== undefined ? { reasoning: override.reasoning } : {}),
         ...(override.contextWindow !== undefined ? { contextWindow: override.contextWindow } : {}),
         ...(override.maxTokens !== undefined ? { maxTokens: override.maxTokens } : {}),
+        ...(override.compat ? { compat: { ...model.compat, ...override.compat } } : {}),
       }
     : model;
 }
